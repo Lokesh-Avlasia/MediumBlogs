@@ -367,11 +367,19 @@ Before you add handoff to your system, ask yourself these questions. If you can'
 
 ### Handoff vs. Single Agent With Tools
 
-| Ask yourself | If YES → | If NO → |
-|---|---|---|
-| Is one system prompt getting too bloated to maintain? | Handoff | Single agent is fine |
-| Are instructions from different domains bleeding into each other? | Handoff | Single agent is fine |
-| Does the agent pick the wrong tool because it has too many? | Handoff | Single agent is fine |
+Ask yourself these three questions. If the answer is "yes" to any of them — handoff might be your fix.
+
+**"Is my system prompt getting too bloated to maintain?"**
+YES → Handoff. Split domains into separate agents.
+NO → Single agent is fine.
+
+**"Are instructions from different domains bleeding into each other?"**
+YES → Handoff. Isolated system prompts solve this.
+NO → Single agent is fine.
+
+**"Does the agent pick the wrong tool because it has too many?"**
+YES → Handoff. Each agent only sees its own tools.
+NO → Single agent is fine.
 
 **Bottom line:** If your single agent works well with its tools — don't add handoff. It's over-engineering. Handoff solves the problem of **one agent trying to be an expert in everything**.
 
@@ -379,11 +387,17 @@ Before you add handoff to your system, ask yourself these questions. If you can'
 
 This is the harder decision. A smart supervisor CAN relay messages between the user and a sub-agent. So when is handoff actually better?
 
-| Ask yourself | If YES → Handoff | If NO → Supervisor + Tool |
-|---|---|---|
-| Does the sub-agent need to ask **domain-specific follow-ups** that the supervisor can't rephrase well? | The billing agent knows to ask "gross or net revenue?" — a supervisor would just parrot "they need more info" | Supervisor relays the question just fine |
-| Is the sub-agent conversation **long** (5+ turns) and would clutter the supervisor's context? | 15 turns of billing back-and-forth wastes the supervisor's context window | 1-2 turns, supervisor handles it easily |
-| Do you care about **cost and latency**? | Every turn through a supervisor = extra LLM call. Handoff removes the middleman | Cost doesn't matter for your use case |
+**"Does the sub-agent need to ask domain-specific follow-ups that the supervisor can't rephrase well?"**
+YES → Handoff. The billing agent knows to ask "gross or net revenue?" — a supervisor would just parrot "they need more info."
+NO → Supervisor + Tool. The supervisor relays the question just fine.
+
+**"Is the sub-agent conversation long (5+ turns) and would it clutter the supervisor's context?"**
+YES → Handoff. 15 turns of billing back-and-forth wastes the supervisor's context window.
+NO → Supervisor + Tool. 1-2 turns, supervisor handles it easily.
+
+**"Do you care about cost and latency?"**
+YES → Handoff. Every turn through a supervisor = extra LLM call. Handoff removes the middleman.
+NO → Supervisor + Tool. Cost doesn't matter for your use case.
 
 **Bottom line:** If the supervisor can relay the conversation just as well as the sub-agent would handle it directly — use supervisor + tool. It's simpler. Switch to handoff only when you **feel the pain**.
 
@@ -413,12 +427,17 @@ If billing needs 15 turns with the user, all that back-and-forth sits in the sup
 
 These are the startup use cases where handoff genuinely shines and no other pattern does it as well:
 
-| Use Case | Why Handoff Wins |
-|---|---|
-| **Customer support with deep troubleshooting** | Tech support needs to diagnose step-by-step: "try this" → "didn't work" → "try that" → each answer changes the next question. A supervisor can't drive this diagnostic conversation. |
-| **Multi-stage sales** (qualify → demo → close) | Each stage needs a different personality and expertise. Sales is warm, technical demo is precise, closing is persuasive. One supervisor can't play all three roles. |
-| **Medical / Legal / Financial intake** | A tax agent asks follow-ups based on previous answers ("LLC? Which state? Payroll or income tax?"). Getting the sequence wrong has real consequences. The specialist MUST drive the conversation. |
-| **Multi-department internal copilot** | HR policies, compensation rules, IT help — each domain has complex rules that change based on context. A 15-turn HR conversation about FMLA leave shouldn't clutter the main agent. |
+**Customer support with deep troubleshooting**
+Tech support needs to diagnose step-by-step: "try this" → "didn't work" → "try that" → each answer changes the next question. A supervisor can't drive this diagnostic conversation.
+
+**Multi-stage sales** (qualify → demo → close)
+Each stage needs a different personality and expertise. Sales is warm, technical demo is precise, closing is persuasive. One supervisor can't play all three roles.
+
+**Medical / Legal / Financial intake**
+A tax agent asks follow-ups based on previous answers ("LLC? Which state? Payroll or income tax?"). Getting the sequence wrong has real consequences. The specialist MUST drive the conversation.
+
+**Multi-department internal copilot**
+HR policies, compensation rules, IT help — each domain has complex rules that change based on context. A 15-turn HR conversation about FMLA leave shouldn't clutter the main agent.
 
 ### The Quick Decision Flowchart
 
