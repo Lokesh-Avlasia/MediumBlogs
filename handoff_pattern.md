@@ -349,15 +349,378 @@ The beauty of this pattern:
 
 ## The Full Code
 
-The complete working implementation is in `handoff_tutorial.py` — a single file you can run with:
+First, install the dependency:
 
 ```bash
 pip install openai
+```
+
+### The "Before" — Single Agent (the problem)
+
+```python
+"""
+The Problem: One Agent Trying to Do Everything
+"""
+
+from openai import OpenAI
+import os
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+SYSTEM_PROMPT = """You are a customer support agent for a SaaS company. You handle ALL types of customer issues:
+
+BILLING ISSUES:
+- You help with invoices, charges, refunds, payment methods, and subscriptions
+- Always ask for the customer's account email and invoice number
+- Know refund policies: refunds take 5-7 business days
+- Know pricing: Basic $29.99/mo, Pro $59.99/mo, Enterprise $99.99/mo
+
+TECHNICAL ISSUES:
+- You help with login problems, app crashes, bugs, and error messages
+- Always ask what device, browser, and app version they are using
+- Know common fixes: clear cache, update app, try incognito mode
+- Know about recent bugs: v3.2.1 had a crash bug on iOS, fixed in v3.2.2
+
+GENERAL:
+- Be friendly and professional
+- Try to resolve issues in as few messages as possible
+- If you're unsure, ask clarifying questions
+"""
+
+conversation_history = []
+
+print("=" * 60)
+print("Customer Support Bot (Single Agent - The Problem)")
+print("=" * 60)
+print("Type 'quit' to exit.\n")
+
+while True:
+    user_input = input("You: ")
+    if user_input.lower() == "quit":
+        break
+
+    conversation_history.append({"role": "user", "content": user_input})
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *conversation_history,
+        ],
+    )
+
+    assistant_message = response.choices[0].message.content
+    conversation_history.append({"role": "assistant", "content": assistant_message})
+    print(f"\nAgent: {assistant_message}\n")
+```
+
+### The "After" — Handoff Pattern (the solution)
+
+Copy this entire code into a single `.py` file and run it.
+
+```python
+"""
+The Solution: The Handoff Pattern
+Three specialized agents that hand off control to each other.
+"""
+
+from openai import OpenAI
+import json
+import os
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+# =============================================================
+# Step 1: Define the handoff tools
+# =============================================================
+# These are NOT regular tools that return data.
+# These are SIGNALS that say "I want to transfer control."
+
+handoff_to_billing_tool = {
+    "type": "function",
+    "function": {
+        "name": "handoff_to_billing",
+        "description": (
+            "Transfer the customer to the billing specialist. "
+            "Use when the customer has questions about invoices, "
+            "charges, refunds, payments, or subscriptions."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief summary of why you are transferring",
+                }
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
+handoff_to_tech_support_tool = {
+    "type": "function",
+    "function": {
+        "name": "handoff_to_tech_support",
+        "description": (
+            "Transfer the customer to technical support. "
+            "Use when the customer has issues with login, app crashes, "
+            "bugs, error messages, or product functionality."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief summary of why you are transferring",
+                }
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
+handoff_to_triage_tool = {
+    "type": "function",
+    "function": {
+        "name": "handoff_to_triage",
+        "description": (
+            "Transfer the customer back to the triage agent. "
+            "Use when the customer asks about something outside "
+            "your area of expertise."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief summary of why you are transferring back",
+                }
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
+
+# =============================================================
+# Step 2: Define the agents
+# =============================================================
+# Each agent is just a dict with a name, system prompt, and tools.
+# That's it. No classes, no inheritance, no framework.
+
+triage_agent = {
+    "name": "Triage Agent",
+    "system_prompt": (
+        "You are a customer support triage agent. "
+        "Your ONLY job is to understand the customer's issue and "
+        "route them to the right specialist. "
+        "You do NOT solve problems yourself. "
+        "You do NOT give technical advice or billing information. "
+        "\n\n"
+        "After a brief greeting or clarifying question, hand off to:\n"
+        "- Billing specialist: for invoices, charges, refunds, payments\n"
+        "- Tech support: for login issues, app crashes, bugs, errors\n"
+    ),
+    "tools": [handoff_to_billing_tool, handoff_to_tech_support_tool],
+}
+
+billing_agent = {
+    "name": "Billing Agent",
+    "system_prompt": (
+        "You are a billing specialist for a SaaS company. "
+        "You handle invoices, charges, refunds, payment methods, "
+        "and subscription changes.\n\n"
+        "IMPORTANT: Ask specific follow-up questions to help the customer:\n"
+        "- Account email address\n"
+        "- Invoice number or approximate date of charge\n"
+        "- Payment method used\n\n"
+        "You know:\n"
+        "- Refunds take 5-7 business days\n"
+        "- Pricing: Basic $29.99/mo, Pro $59.99/mo, Enterprise $99.99/mo\n"
+        "- Duplicate charges are usually system errors during payment processing\n\n"
+        "If the customer asks about something OUTSIDE billing "
+        "(technical issues, bugs, login problems), "
+        "hand them back to triage using the handoff_to_triage tool. "
+        "Do NOT try to help with technical issues."
+    ),
+    "tools": [handoff_to_triage_tool],
+}
+
+tech_support_agent = {
+    "name": "Tech Support Agent",
+    "system_prompt": (
+        "You are a technical support specialist for a SaaS company. "
+        "You handle login issues, app crashes, bugs, error messages, "
+        "and product functionality problems.\n\n"
+        "IMPORTANT: Ask diagnostic questions to troubleshoot:\n"
+        "- What device (iPhone, Android, desktop)?\n"
+        "- What browser or app version?\n"
+        "- When did the issue start?\n"
+        "- What error message do they see?\n\n"
+        "You know:\n"
+        "- v3.2.1 had a crash bug on iOS, fixed in v3.2.2\n"
+        "- Common fixes: clear cache, update app, try incognito mode\n"
+        "- Login issues often caused by browser extensions\n\n"
+        "If the customer asks about something OUTSIDE tech support "
+        "(billing, invoices, refunds), "
+        "hand them back to triage using the handoff_to_triage tool. "
+        "Do NOT try to help with billing issues."
+    ),
+    "tools": [handoff_to_triage_tool],
+}
+
+# Registry: maps tool names to target agents
+agents = {
+    "triage": triage_agent,
+    "billing": billing_agent,
+    "tech_support": tech_support_agent,
+}
+
+# Maps handoff tool names → agent keys
+handoff_map = {
+    "handoff_to_billing": "billing",
+    "handoff_to_tech_support": "tech_support",
+    "handoff_to_triage": "triage",
+}
+
+
+# =============================================================
+# Step 3: The core function — call an agent
+# =============================================================
+# Notice: the system prompt is NOT in the conversation history.
+# It's prepended fresh each time. When we switch agents, the
+# conversation stays the same but the system prompt changes.
+# That's the entire handoff mechanism.
+
+def call_agent(agent, conversation_history):
+    """Call an agent with the shared conversation history."""
+    messages = [
+        {"role": "system", "content": agent["system_prompt"]},
+        *conversation_history,
+    ]
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        tools=agent["tools"] if agent["tools"] else None,
+    )
+
+    return response.choices[0].message
+
+
+# =============================================================
+# Step 4: Process handoff tool calls
+# =============================================================
+
+def process_tool_call(tool_call):
+    """Parse a tool call and return the target agent key and reason."""
+    function_name = tool_call.function.name
+    arguments = json.loads(tool_call.function.arguments)
+    reason = arguments.get("reason", "")
+
+    target_agent_key = handoff_map.get(function_name)
+    return target_agent_key, reason
+
+
+# =============================================================
+# Step 5: The main chat loop
+# =============================================================
+
+def run_chat_loop():
+    """Run the interactive chat with handoff support."""
+    active_agent_key = "triage"
+    active_agent = agents[active_agent_key]
+    conversation_history = []
+
+    print("=" * 60)
+    print("Customer Support Bot (Handoff Pattern)")
+    print("=" * 60)
+    print(f"[Connected to: {active_agent['name']}]")
+    print("Type 'quit' to exit.\n")
+
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() == "quit":
+            break
+
+        conversation_history.append({"role": "user", "content": user_input})
+
+        # Inner loop: keep calling agents until we get a text response.
+        # This handles handoffs — when an agent returns a tool call
+        # instead of text, we switch agents and call again immediately.
+        # The user does NOT need to send another message.
+        while True:
+            response = call_agent(active_agent, conversation_history)
+
+            # Check if the agent wants to hand off
+            if response.tool_calls:
+                tool_call = response.tool_calls[0]
+                target_key, reason = process_tool_call(tool_call)
+
+                if target_key and target_key in agents:
+                    # --- This is the handoff ---
+
+                    # 1. Append the assistant's tool call to history
+                    #    (OpenAI API requires tool calls to be followed
+                    #     by tool results in the conversation)
+                    conversation_history.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tool_call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call.function.name,
+                                    "arguments": tool_call.function.arguments,
+                                },
+                            }
+                        ],
+                    })
+
+                    # 2. Append the tool result
+                    conversation_history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": f"Handed off to {agents[target_key]['name']}. Reason: {reason}",
+                    })
+
+                    # 3. Switch the active agent
+                    old_name = active_agent["name"]
+                    active_agent_key = target_key
+                    active_agent = agents[active_agent_key]
+
+                    print(f"\n  [Handoff: {old_name} → {active_agent['name']}]")
+                    print(f"  [Reason: {reason}]\n")
+
+                    # 4. DO NOT break — continue the loop so the NEW
+                    #    agent speaks immediately without waiting for
+                    #    user input. This is what makes handoff feel
+                    #    natural: "Hi, I'm the billing specialist..."
+                    continue
+
+            # No tool call — agent gave a text response
+            assistant_message = response.content
+            conversation_history.append({
+                "role": "assistant",
+                "content": assistant_message,
+            })
+            print(f"\n{active_agent['name']}: {assistant_message}\n")
+            break
+
+
+if __name__ == "__main__":
+    run_chat_loop()
+```
+
+Set your API key and run it:
+
+```bash
 export OPENAI_API_KEY="your-key-here"
 python handoff_tutorial.py
 ```
-
-And the "before" example showing the single-agent problem is in `single_agent_problem.py`.
 
 ---
 
