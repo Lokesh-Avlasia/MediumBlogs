@@ -21,7 +21,7 @@ Let's start with what most people build first — one agent that handles everyth
 
 Here's a customer support bot that does billing AND tech support:
 
-```python
+```
 SYSTEM_PROMPT = """You are a customer support agent. You handle ALL types of issues:
 
 BILLING ISSUES:
@@ -87,7 +87,7 @@ Each agent is just a dictionary with three things: a name, a system prompt, and 
 
 ### Agent 1: Triage
 
-```python
+```
 triage_agent = {
     "name": "Triage Agent",
     "system_prompt": (
@@ -107,7 +107,7 @@ Notice: **no billing knowledge, no tech knowledge**. Triage only knows how to li
 
 ### Agent 2: Billing Specialist
 
-```python
+```
 billing_agent = {
     "name": "Billing Agent",
     "system_prompt": (
@@ -128,7 +128,7 @@ Notice: **deep billing knowledge, zero tech knowledge**. And it can only hand of
 
 ### Agent 3: Tech Support
 
-```python
+```
 tech_support_agent = {
     "name": "Tech Support Agent",
     "system_prompt": (
@@ -157,7 +157,7 @@ Now for the interesting part — how does the transfer actually work?
 
 The handoff "tools" are not real tools that fetch data or call APIs. They're **signals**. When an agent returns a `handoff_to_billing` tool call, it's saying: "I want to transfer this conversation."
 
-```python
+```
 handoff_to_billing_tool = {
     "type": "function",
     "function": {
@@ -181,7 +181,7 @@ handoff_to_billing_tool = {
 
 This is the core function. Pay attention to one detail:
 
-```python
+```
 def call_agent(agent, conversation_history):
     messages = [
         {"role": "system", "content": agent["system_prompt"]},  # ← THIS changes
@@ -203,7 +203,7 @@ def call_agent(agent, conversation_history):
 
 The main loop has an **inner loop** that handles handoffs:
 
-```python
+```
 def run_chat_loop():
     active_agent = triage_agent
     conversation_history = []
@@ -357,7 +357,7 @@ pip install openai
 
 ### The "Before" — Single Agent (the problem)
 
-```python
+```
 """
 The Problem: One Agent Trying to Do Everything
 """
@@ -418,7 +418,7 @@ while True:
 
 Copy this entire code into a single `.py` file and run it.
 
-```python
+```
 """
 The Solution: The Handoff Pattern
 Three specialized agents that hand off control to each other.
