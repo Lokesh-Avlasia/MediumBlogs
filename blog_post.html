@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>The Handoff Pattern: Teaching AI Agents to "Transfer the Call"</title>
+</head>
+<body>
+
+<h1>The Handoff Pattern: Teaching AI Agents to &ldquo;Transfer the Call&rdquo;</h1>
+
+<p><em>A practical guide to building multi-agent systems &mdash; no framework needed</em></p>
+
+<hr>
+
+<p>If you&rsquo;ve ever called customer support and heard &ldquo;Let me transfer you to a specialist,&rdquo; you already understand the handoff pattern. In this tutorial, we&rsquo;ll build exactly that &mdash; but with AI agents.</p>
+
+<p>By the end, you&rsquo;ll understand:</p>
+<ul>
+<li>Why a single AI agent fails at multi-domain tasks</li>
+<li>What the handoff pattern is and when you need it</li>
+<li>How to build it from scratch with Python and the OpenAI API</li>
+</ul>
+
+<p>No frameworks. No magic. Just clean Python so you learn the <strong>pattern</strong>, not a library.</p>
+
+<hr>
+
+<h2>The Single Agent That Tries Too Hard</h2>
+
+<p>Let&rsquo;s start with what most people build first &mdash; one agent that handles everything.</p>
+
+<p>Here&rsquo;s a customer support bot that does billing AND tech support:</p>
+
+<pre><code>SYSTEM_PROMPT = """You are a customer support agent. You handle ALL types of issues:
+
+BILLING ISSUES:
+- Help with invoices, charges, refunds, payments
+- Always ask for account email and invoice number
+- Refunds take 5-7 business days
+- Pricing: Basic $29.99/mo, Pro $59.99/mo, Enterprise $99.99/mo
+
+TECHNICAL ISSUES:
+- Help with login problems, app crashes, bugs, errors
+- Always ask what device, browser, and app version
+- Common fixes: clear cache, update app, try incognito mode
+- Known bug: v3.2.1 crashes on iOS, fixed in v3.2.2
+"""</code></pre>
+
+<p>Now try this conversation:</p>
+
+<blockquote>
+<p><strong>You:</strong> I was charged twice for my subscription last month</p>
+<p><strong>Agent:</strong> I&rsquo;m sorry about the double charge! Could you please provide your account email and the approximate date? Also, what device are you using to access your account?</p>
+</blockquote>
+
+<p>See the problem? It&rsquo;s asking for your <strong>device</strong> when you have a <strong>billing</strong> issue. The billing and tech support instructions are bleeding into each other.</p>
+
+<p>This gets worse as you add more domains. A single agent with 20 responsibilities and 15 tools will start guessing which tool to use and mixing up its instructions. It&rsquo;s like hiring one person to be your accountant, your IT help desk, and your receptionist &mdash; simultaneously.</p>
+
+<p><strong>The core problem:</strong> One system prompt cannot carry deep expertise in multiple domains without losing focus.</p>
+
+<hr>
+
+<h2>What If Agents Could Transfer the Call?</h2>
+
+<p>Think about how a real company works:</p>
+
+<ol>
+<li>You call and reach a <strong>receptionist</strong> (triage)</li>
+<li>The receptionist asks &ldquo;What&rsquo;s this about?&rdquo;</li>
+<li>They <strong>transfer you</strong> to the billing department or tech support</li>
+<li>That specialist helps you &mdash; they know their domain deeply</li>
+<li>If you bring up a different topic, they transfer you back</li>
+</ol>
+
+<p>This is the <strong>handoff pattern</strong>:</p>
+
+<blockquote><p>One agent transfers control of the conversation to another agent that is better suited for the task.</p></blockquote>
+
+<p>Here are the key concepts:</p>
+
+<ul>
+<li><strong>Agent</strong>: An LLM call with a specific system prompt and set of tools</li>
+<li><strong>Active Agent</strong>: Which agent is currently &ldquo;on the phone&rdquo; with the user &mdash; only one at a time</li>
+<li><strong>Handoff</strong>: The active agent decides to transfer control to another agent</li>
+<li><strong>Conversation History</strong>: The shared memory that travels with the user across handoffs &mdash; so they never repeat themselves</li>
+</ul>
+
+<p><strong>Important:</strong> A handoff is NOT a tool call that returns data. It&rsquo;s a <strong>transfer of control</strong>. The old agent goes to sleep, the new agent wakes up, and the new agent talks to the user directly.</p>
+
+<hr>
+
+<h2>Building the Agents</h2>
+
+<p>Each agent is just a dictionary with three things: a name, a system prompt, and the tools it can call.</p>
+
+<pre><code>triage_agent = {
+    "name": "Triage Agent",
+    "system_prompt": (
+        "You are a customer support triage agent. "
+        "Your ONLY job is to understand the customer's issue "
+        "and route them to the right specialist. "
+        "You do NOT solve problems yourself.\n\n"
+        "Hand off to:\n"
+        "- Billing specialist: for invoices, charges, refunds\n"
+        "- Tech support: for login issues, app crashes, bugs\n"
+    ),
+    "tools": [handoff_to_billing_tool, handoff_to_tech_support_tool],
+}
+
+billing_agent = {
+    "name": "Billing Agent",
+    "system_prompt": (
+        "You are a billing specialist. "
+        "You handle invoices, charges, refunds, payments.\n\n"
+        "Ask specific follow-up questions:\n"
+        "- Account email address\n"
+        "- Invoice number or approximate date of charge\n"
+        "- Payment method used\n\n"
+        "If the customer asks about something OUTSIDE billing, "
+        "hand them back to triage. Do NOT help with tech issues."
+    ),
+    "tools": [handoff_to_triage_tool],
+}
+
+tech_support_agent = {
+    "name": "Tech Support Agent",
+    "system_prompt": (
+        "You are a technical support specialist. "
+        "You handle login issues, app crashes, bugs, errors.\n\n"
+        "Ask diagnostic questions:\n"
+        "- What device (iPhone, Android, desktop)?\n"
+        "- What browser or app version?\n"
+        "- When did the issue start?\n\n"
+        "If the customer asks about something OUTSIDE tech support, "
+        "hand them back to triage. Do NOT help with billing."
+    ),
+    "tools": [handoff_to_triage_tool],
+}</code></pre>
+
+<p>Notice the design:</p>
+
+<ul>
+<li><strong>Triage Agent</strong> &mdash; no billing knowledge, no tech knowledge. It only knows how to listen and route.</li>
+<li><strong>Billing Agent</strong> &mdash; deep billing knowledge, zero tech knowledge. Can only hand off back to triage &mdash; it doesn&rsquo;t know other agents exist.</li>
+<li><strong>Tech Support Agent</strong> &mdash; deep tech knowledge, zero billing knowledge. Same &mdash; can only hand back to triage.</li>
+</ul>
+
+<p><strong>Compare this to the single agent approach.</strong> Each system prompt is small, focused, and carries only the knowledge it needs. The billing agent will never accidentally ask about your device. The tech agent will never mention refund policies.</p>
+
+<hr>
+
+<h2>The Handoff Mechanism</h2>
+
+<p>Now for the interesting part &mdash; how does the transfer actually work?</p>
+
+<h3>The Handoff Tools</h3>
+
+<p>The handoff &ldquo;tools&rdquo; are not real tools that fetch data or call APIs. They&rsquo;re <strong>signals</strong>. When an agent returns a <code>handoff_to_billing</code> tool call, it&rsquo;s saying: &ldquo;I want to transfer this conversation.&rdquo;</p>
+
+<pre><code>handoff_to_billing_tool = {
+    "type": "function",
+    "function": {
+        "name": "handoff_to_billing",
+        "description": "Transfer the customer to the billing specialist.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief summary of why you are transferring",
+                }
+            },
+            "required": ["reason"],
+        },
+    },
+}</code></pre>
+
+<h3>Calling an Agent</h3>
+
+<p>This is the core function. Pay attention to one detail:</p>
+
+<pre><code>def call_agent(agent, conversation_history):
+    messages = [
+        {"role": "system", "content": agent["system_prompt"]},  # THIS changes per agent
+        *conversation_history,                                    # THIS stays the same
+    ]
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        tools=agent["tools"],
+    )
+
+    return response.choices[0].message</code></pre>
+
+<p><strong>This is the entire handoff mechanism.</strong> When you switch agents, you don&rsquo;t start a new conversation. You keep the same history but swap the system prompt. The new agent &ldquo;sees&rdquo; everything that was discussed but through its own specialist lens.</p>
+
+<h3>The Chat Loop</h3>
+
+<p>The main loop has an <strong>inner loop</strong> that handles handoffs:</p>
+
+<pre><code>def run_chat_loop():
+    active_agent = triage_agent
+    conversation_history = []
+
+    while True:
+        user_input = input("You: ")
+        conversation_history.append({"role": "user", "content": user_input})
+
+        # Inner loop: keep going until an agent gives a TEXT response
+        while True:
+            response = call_agent(active_agent, conversation_history)
+
+            if response.tool_calls:
+                # Agent wants to hand off - switch agents
+                tool_call = response.tool_calls[0]
+                target_key, reason = process_tool_call(tool_call)
+
+                # Add the tool call and result to history (required by API)
+                conversation_history.append(...)  # tool call message
+                conversation_history.append(...)  # tool result message
+
+                # Switch!
+                active_agent = agents[target_key]
+                continue  # Don't wait for user, let new agent speak
+
+            # Agent gave text - show it and wait for next user message
+            print(f"{active_agent['name']}: {response.content}")
+            conversation_history.append({"role": "assistant", "content": response.content})
+            break</code></pre>
+
+<p><strong>The critical detail:</strong> After a handoff, we do NOT wait for the user to type again. We <code>continue</code> the inner loop, which immediately calls the new agent. This is what lets the billing agent say &ldquo;Hi, I&rsquo;m the billing specialist. I can see you had a question about a charge...&rdquo; without the user having to repeat themselves.</p>
+
+<hr>
+
+<h2>Watch It Work</h2>
+
+<p>Here&rsquo;s a real conversation with the system. I&rsquo;ve added [debug] annotations showing what happens behind the scenes.</p>
+
+<blockquote>
+<p><strong>You:</strong> Hi, I was charged twice for my subscription last month</p>
+<p><em>[debug] Triage Agent receives the message</em><br>
+<em>[debug] Tool call: handoff_to_billing(reason=&ldquo;duplicate charge on subscription&rdquo;)</em><br>
+<em>[Handoff: Triage Agent &rarr; Billing Agent]</em></p>
+<p><strong>Billing Agent:</strong> Hi there! I&rsquo;m sorry to hear about the duplicate charge. I&rsquo;d like to look into this for you. Could you please provide:<br>
+1. The email address associated with your account?<br>
+2. The approximate date of the charges?</p>
+</blockquote>
+
+<p>The billing agent asked for <strong>email and date</strong> &mdash; billing-specific questions. Not your device or browser.</p>
+
+<blockquote>
+<p><strong>You:</strong> Sure, it&rsquo;s jane@example.com and the charges were around Feb 15</p>
+<p><strong>Billing Agent:</strong> Thank you, Jane. I can see two charges of $29.99 on February 15th. This appears to be a system error during payment processing. I&rsquo;ll initiate a refund for the duplicate charge &mdash; you should see it back on your card within 5-7 business days. Is there anything else I can help with?</p>
+</blockquote>
+
+<p>Now watch what happens when the topic changes:</p>
+
+<blockquote>
+<p><strong>You:</strong> Actually yes &mdash; my app has been crashing on my phone lately</p>
+<p><em>[debug] Billing Agent receives the message</em><br>
+<em>[debug] Tool call: handoff_to_triage(reason=&ldquo;customer reporting app crash, not a billing issue&rdquo;)</em><br>
+<em>[Handoff: Billing Agent &rarr; Triage Agent]</em></p>
+<p><em>[debug] Triage Agent receives the message</em><br>
+<em>[debug] Tool call: handoff_to_tech_support(reason=&ldquo;app crashing on mobile device&rdquo;)</em><br>
+<em>[Handoff: Triage Agent &rarr; Tech Support Agent]</em></p>
+<p><strong>Tech Support Agent:</strong> Hey! I can see you&rsquo;ve been experiencing app crashes on your phone. Let me help troubleshoot that. A few questions:<br>
+1. What type of phone are you using (iPhone or Android)?<br>
+2. What version of our app do you have installed?<br>
+3. When did the crashing start?</p>
+</blockquote>
+
+<p>Look at the difference. Tech support asked for <strong>phone type, app version, and timeline</strong> &mdash; completely different questions than billing asked. Same system, same conversation, but a different specialist is now in charge.</p>
+
+<blockquote>
+<p><strong>You:</strong> iPhone 14, latest version, started about a week ago</p>
+<p><strong>Tech Support Agent:</strong> That timing matches a known bug in version 3.2.1 that affected iOS devices. We released a fix in version 3.2.2 yesterday. Could you try updating the app from the App Store? If the crash persists after updating, try clearing the app cache: Settings &rarr; Apps &rarr; [Our App] &rarr; Clear Cache.</p>
+</blockquote>
+
+<p>Two handoffs happened in the background between agents, but the user experienced one seamless conversation.</p>
+
+<hr>
+
+<h2>Why This Matters Beyond the Demo</h2>
+
+<h3>You Don&rsquo;t Need a Framework for This</h3>
+
+<p>What we built is ~200 lines of Python. The handoff pattern is not a framework feature &mdash; it&rsquo;s an <strong>architectural idea</strong>: same conversation history, different system prompt, and a mechanism to switch.</p>
+
+<p>Frameworks like OpenAI Swarm and LangGraph implement this same pattern with nicer abstractions. But the core idea is what you just saw.</p>
+
+<h3>When You Actually Need Handoff</h3>
+
+<p>You need handoff when <strong>all three</strong> of these are true:</p>
+
+<ol>
+<li><strong>Domain expertise matters for the conversation itself</strong> &mdash; the specialist asks smarter questions than a generalist could relay</li>
+<li><strong>The conversation goes deep</strong> &mdash; multiple turns of back-and-forth, not just a single Q&amp;A</li>
+<li><strong>The flow is unpredictable</strong> &mdash; each user answer changes what the agent asks next</li>
+</ol>
+
+<p>If any of these are false, a simpler pattern (single agent with tools, or a supervisor orchestrating sub-agents) works fine.</p>
+
+<h3>Scaling Up</h3>
+
+<p>The beauty of this pattern:</p>
+
+<ul>
+<li><strong>Add a new agent</strong> (e.g., Sales) without touching existing agents &mdash; just add a new tool to triage</li>
+<li><strong>Test independently</strong> &mdash; each agent can be tested in isolation with mock conversations</li>
+<li><strong>Use different models</strong> &mdash; GPT-4o for complex billing, GPT-4o-mini for simple triage</li>
+<li><strong>Change one agent&rsquo;s behavior</strong> without risking regressions in others</li>
+</ul>
+
+<h3>Try It Yourself</h3>
+
+<ol>
+<li><strong>Add a Sales agent</strong> that handles pricing questions and upsells</li>
+<li><strong>Add memory</strong> &mdash; let agents store notes that persist across handoffs</li>
+<li><strong>Use a cheaper model</strong> for triage (it only routes, doesn&rsquo;t need to be smart)</li>
+<li><strong>Add guardrails</strong> &mdash; what if the billing agent refuses to hand back? Add a max-turn check</li>
+</ol>
+
+<hr>
+
+<h2>The Full Code</h2>
+
+<p>Install the dependency:</p>
+
+<pre><code>pip install openai</code></pre>
+
+<h3>The &ldquo;Before&rdquo; &mdash; Single Agent (the problem)</h3>
+
+<pre><code>"""
+The Problem: One Agent Trying to Do Everything
+"""
+
+from openai import OpenAI
+import os
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+SYSTEM_PROMPT = """You are a customer support agent for a SaaS company. You handle ALL types of customer issues:
+
+BILLING ISSUES:
+- You help with invoices, charges, refunds, payment methods, and subscriptions
+- Always ask for the customer's account email and invoice number
+- Know refund policies: refunds take 5-7 business days
+- Know pricing: Basic $29.99/mo, Pro $59.99/mo, Enterprise $99.99/mo
+
+TECHNICAL ISSUES:
+- You help with login problems, app crashes, bugs, and error messages
+- Always ask what device, browser, and app version they are using
+- Know common fixes: clear cache, update app, try incognito mode
+- Know about recent bugs: v3.2.1 had a crash bug on iOS, fixed in v3.2.2
+
+GENERAL:
+- Be friendly and professional
+- Try to resolve issues in as few messages as possible
+- If you're unsure, ask clarifying questions
+"""
+
+conversation_history = []
+
+print("=" * 60)
+print("Customer Support Bot (Single Agent - The Problem)")
+print("=" * 60)
+print("Type 'quit' to exit.\n")
+
+while True:
+    user_input = input("You: ")
+    if user_input.lower() == "quit":
+        break
+
+    conversation_history.append({"role": "user", "content": user_input})
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *conversation_history,
+        ],
+    )
+
+    assistant_message = response.choices[0].message.content
+    conversation_history.append({"role": "assistant", "content": assistant_message})
+    print(f"\nAgent: {assistant_message}\n")</code></pre>
+
+<h3>The &ldquo;After&rdquo; &mdash; Handoff Pattern (the solution)</h3>
+
+<p>Copy this entire code into a single .py file and run it.</p>
+
+<pre><code>"""
+The Solution: The Handoff Pattern
+Three specialized agents that hand off control to each other.
+
+Run: pip install openai
+Set: export OPENAI_API_KEY="your-key-here"
+"""
+
+from openai import OpenAI
+import json
+import os
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+# =============================================================
+# Step 1: Define the handoff tools
+# =============================================================
+
+handoff_to_billing_tool = {
+    "type": "function",
+    "function": {
+        "name": "handoff_to_billing",
+        "description": (
+            "Transfer the customer to the billing specialist. "
+            "Use when the customer has questions about invoices, "
+            "charges, refunds, payments, or subscriptions."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief summary of why you are transferring",
+                }
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
+handoff_to_tech_support_tool = {
+    "type": "function",
+    "function": {
+        "name": "handoff_to_tech_support",
+        "description": (
+            "Transfer the customer to technical support. "
+            "Use when the customer has issues with login, app crashes, "
+            "bugs, error messages, or product functionality."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief summary of why you are transferring",
+                }
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
+handoff_to_triage_tool = {
+    "type": "function",
+    "function": {
+        "name": "handoff_to_triage",
+        "description": (
+            "Transfer the customer back to the triage agent. "
+            "Use when the customer asks about something outside "
+            "your area of expertise."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief summary of why you are transferring back",
+                }
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
+
+# =============================================================
+# Step 2: Define the agents
+# =============================================================
+
+triage_agent = {
+    "name": "Triage Agent",
+    "system_prompt": (
+        "You are a customer support triage agent. "
+        "Your ONLY job is to understand the customer's issue and "
+        "route them to the right specialist. "
+        "You do NOT solve problems yourself. "
+        "You do NOT give technical advice or billing information. "
+        "\n\n"
+        "After a brief greeting or clarifying question, hand off to:\n"
+        "- Billing specialist: for invoices, charges, refunds, payments\n"
+        "- Tech support: for login issues, app crashes, bugs, errors\n"
+    ),
+    "tools": [handoff_to_billing_tool, handoff_to_tech_support_tool],
+}
+
+billing_agent = {
+    "name": "Billing Agent",
+    "system_prompt": (
+        "You are a billing specialist for a SaaS company. "
+        "You handle invoices, charges, refunds, payment methods, "
+        "and subscription changes.\n\n"
+        "IMPORTANT: Ask specific follow-up questions to help the customer:\n"
+        "- Account email address\n"
+        "- Invoice number or approximate date of charge\n"
+        "- Payment method used\n\n"
+        "You know:\n"
+        "- Refunds take 5-7 business days\n"
+        "- Pricing: Basic $29.99/mo, Pro $59.99/mo, Enterprise $99.99/mo\n"
+        "- Duplicate charges are usually system errors during payment processing\n\n"
+        "If the customer asks about something OUTSIDE billing "
+        "(technical issues, bugs, login problems), "
+        "hand them back to triage using the handoff_to_triage tool. "
+        "Do NOT try to help with technical issues."
+    ),
+    "tools": [handoff_to_triage_tool],
+}
+
+tech_support_agent = {
+    "name": "Tech Support Agent",
+    "system_prompt": (
+        "You are a technical support specialist for a SaaS company. "
+        "You handle login issues, app crashes, bugs, error messages, "
+        "and product functionality problems.\n\n"
+        "IMPORTANT: Ask diagnostic questions to troubleshoot:\n"
+        "- What device (iPhone, Android, desktop)?\n"
+        "- What browser or app version?\n"
+        "- When did the issue start?\n"
+        "- What error message do they see?\n\n"
+        "You know:\n"
+        "- v3.2.1 had a crash bug on iOS, fixed in v3.2.2\n"
+        "- Common fixes: clear cache, update app, try incognito mode\n"
+        "- Login issues often caused by browser extensions\n\n"
+        "If the customer asks about something OUTSIDE tech support "
+        "(billing, invoices, refunds), "
+        "hand them back to triage using the handoff_to_triage tool. "
+        "Do NOT try to help with billing issues."
+    ),
+    "tools": [handoff_to_triage_tool],
+}
+
+agents = {
+    "triage": triage_agent,
+    "billing": billing_agent,
+    "tech_support": tech_support_agent,
+}
+
+handoff_map = {
+    "handoff_to_billing": "billing",
+    "handoff_to_tech_support": "tech_support",
+    "handoff_to_triage": "triage",
+}
+
+
+# =============================================================
+# Step 3: The core function - call an agent
+# =============================================================
+
+def call_agent(agent, conversation_history):
+    """Call an agent with the shared conversation history."""
+    messages = [
+        {"role": "system", "content": agent["system_prompt"]},
+        *conversation_history,
+    ]
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        tools=agent["tools"] if agent["tools"] else None,
+    )
+
+    return response.choices[0].message
+
+
+# =============================================================
+# Step 4: Process handoff tool calls
+# =============================================================
+
+def process_tool_call(tool_call):
+    """Parse a tool call and return the target agent key and reason."""
+    function_name = tool_call.function.name
+    arguments = json.loads(tool_call.function.arguments)
+    reason = arguments.get("reason", "")
+
+    target_agent_key = handoff_map.get(function_name)
+    return target_agent_key, reason
+
+
+# =============================================================
+# Step 5: The main chat loop
+# =============================================================
+
+def run_chat_loop():
+    """Run the interactive chat with handoff support."""
+    active_agent_key = "triage"
+    active_agent = agents[active_agent_key]
+    conversation_history = []
+
+    print("=" * 60)
+    print("Customer Support Bot (Handoff Pattern)")
+    print("=" * 60)
+    print(f"[Connected to: {active_agent['name']}]")
+    print("Type 'quit' to exit.\n")
+
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() == "quit":
+            break
+
+        conversation_history.append({"role": "user", "content": user_input})
+
+        while True:
+            response = call_agent(active_agent, conversation_history)
+
+            if response.tool_calls:
+                tool_call = response.tool_calls[0]
+                target_key, reason = process_tool_call(tool_call)
+
+                if target_key and target_key in agents:
+                    conversation_history.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tool_call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call.function.name,
+                                    "arguments": tool_call.function.arguments,
+                                },
+                            }
+                        ],
+                    })
+
+                    conversation_history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": f"Handed off to {agents[target_key]['name']}. Reason: {reason}",
+                    })
+
+                    old_name = active_agent["name"]
+                    active_agent_key = target_key
+                    active_agent = agents[active_agent_key]
+
+                    print(f"\n  [Handoff: {old_name} to {active_agent['name']}]")
+                    print(f"  [Reason: {reason}]\n")
+                    continue
+
+            assistant_message = response.content
+            conversation_history.append({
+                "role": "assistant",
+                "content": assistant_message,
+            })
+            print(f"\n{active_agent['name']}: {assistant_message}\n")
+            break
+
+
+if __name__ == "__main__":
+    run_chat_loop()</code></pre>
+
+<p>Set your API key and run it:</p>
+
+<pre><code>export OPENAI_API_KEY="your-key-here"
+python handoff_tutorial.py</code></pre>
+
+<hr>
+
+<h2>When Should You Use the Handoff Pattern? (The Decision Guide)</h2>
+
+<p>Before you add handoff to your system, ask yourself these questions. If you can&rsquo;t say &ldquo;yes&rdquo; to the handoff side &mdash; you don&rsquo;t need it.</p>
+
+<h3>Handoff vs. Single Agent With Tools</h3>
+
+<p>Ask yourself these three questions. If the answer is &ldquo;yes&rdquo; to any of them &mdash; handoff might be your fix.</p>
+
+<p><strong>&ldquo;Is my system prompt getting too bloated to maintain?&rdquo;</strong><br>
+YES &rarr; Handoff. Split domains into separate agents.<br>
+NO &rarr; Single agent is fine.</p>
+
+<p><strong>&ldquo;Are instructions from different domains bleeding into each other?&rdquo;</strong><br>
+YES &rarr; Handoff. Isolated system prompts solve this.<br>
+NO &rarr; Single agent is fine.</p>
+
+<p><strong>&ldquo;Does the agent pick the wrong tool because it has too many?&rdquo;</strong><br>
+YES &rarr; Handoff. Each agent only sees its own tools.<br>
+NO &rarr; Single agent is fine.</p>
+
+<p><strong>Bottom line:</strong> If your single agent works well with its tools &mdash; don&rsquo;t add handoff. It&rsquo;s over-engineering. Handoff solves the problem of <strong>one agent trying to be an expert in everything</strong>.</p>
+
+<h3>Handoff vs. Supervisor + Agent-as-Tool</h3>
+
+<p>This is the harder decision. A smart supervisor CAN relay messages between the user and a sub-agent. So when is handoff actually better?</p>
+
+<p><strong>&ldquo;Does the sub-agent need to ask domain-specific follow-ups that the supervisor can&rsquo;t rephrase well?&rdquo;</strong><br>
+YES &rarr; Handoff. The billing agent knows to ask &ldquo;gross or net revenue?&rdquo; &mdash; a supervisor would just parrot &ldquo;they need more info.&rdquo;<br>
+NO &rarr; Supervisor + Tool. The supervisor relays the question just fine.</p>
+
+<p><strong>&ldquo;Is the sub-agent conversation long (5+ turns) and would it clutter the supervisor&rsquo;s context?&rdquo;</strong><br>
+YES &rarr; Handoff. 15 turns of billing back-and-forth wastes the supervisor&rsquo;s context window.<br>
+NO &rarr; Supervisor + Tool. 1-2 turns, supervisor handles it easily.</p>
+
+<p><strong>&ldquo;Do you care about cost and latency?&rdquo;</strong><br>
+YES &rarr; Handoff. Every turn through a supervisor = extra LLM call. Handoff removes the middleman.<br>
+NO &rarr; Supervisor + Tool. Cost doesn&rsquo;t matter for your use case.</p>
+
+<p><strong>Bottom line:</strong> If the supervisor can relay the conversation just as well as the sub-agent would handle it directly &mdash; use supervisor + tool. It&rsquo;s simpler. Switch to handoff only when you <strong>feel the pain</strong>.</p>
+
+<h3>The 3 Reasons That Actually Matter</h3>
+
+<p>After all the theory, it comes down to exactly three reasons to use handoff:</p>
+
+<p><strong>1. The sub-agent talks to the user BETTER than a supervisor can relay</strong></p>
+
+<p>The specialist asks smarter, more contextual follow-up questions. A billing agent that sees your payment data can ask &ldquo;I see your gross revenue is up but net is down because chargebacks doubled &mdash; which one concerns you?&rdquo; A supervisor relaying messages can never do this.</p>
+
+<p><strong>2. You want to save cost and reduce latency</strong></p>
+
+<p>With a supervisor as middleman: User &rarr; Supervisor (LLM call) &rarr; Sub-agent (LLM call) &rarr; Supervisor (LLM call) &rarr; User = 3 LLM calls per turn.</p>
+
+<p>With handoff: User &rarr; Sub-agent (LLM call) &rarr; User = 1 LLM call per turn.</p>
+
+<p>Over a 10-turn conversation, that&rsquo;s <strong>20 extra LLM calls saved</strong>.</p>
+
+<p><strong>3. Long sub-conversations would pollute the supervisor&rsquo;s memory</strong></p>
+
+<p>If billing needs 15 turns with the user, all that back-and-forth sits in the supervisor&rsquo;s context. When the user later asks about something else, the supervisor is dragging around 15 turns of irrelevant billing detail &mdash; wasting tokens and confusing the model.</p>
+
+<p><strong>If none of these three reasons apply to you &mdash; you don&rsquo;t need handoff. Use a simpler pattern.</strong></p>
+
+<h3>Real-World Problems That Need Handoff</h3>
+
+<p>These are the startup use cases where handoff genuinely shines and no other pattern does it as well:</p>
+
+<p><strong>Customer support with deep troubleshooting</strong><br>
+Tech support needs to diagnose step-by-step: &ldquo;try this&rdquo; &rarr; &ldquo;didn&rsquo;t work&rdquo; &rarr; &ldquo;try that&rdquo; &rarr; each answer changes the next question. A supervisor can&rsquo;t drive this diagnostic conversation.</p>
+
+<p><strong>Multi-stage sales</strong> (qualify &rarr; demo &rarr; close)<br>
+Each stage needs a different personality and expertise. Sales is warm, technical demo is precise, closing is persuasive. One supervisor can&rsquo;t play all three roles.</p>
+
+<p><strong>Medical / Legal / Financial intake</strong><br>
+A tax agent asks follow-ups based on previous answers (&ldquo;LLC? Which state? Payroll or income tax?&rdquo;). Getting the sequence wrong has real consequences. The specialist MUST drive the conversation.</p>
+
+<p><strong>Multi-department internal copilot</strong><br>
+HR policies, compensation rules, IT help &mdash; each domain has complex rules that change based on context. A 15-turn HR conversation about FMLA leave shouldn&rsquo;t clutter the main agent.</p>
+
+<h3>The Quick Decision Flowchart</h3>
+
+<p>Is your single agent struggling with too many domains?</p>
+
+<p>NO &rarr; Keep your single agent. You&rsquo;re fine.</p>
+
+<p>YES &rarr; Can a supervisor relay the conversation just as well?</p>
+
+<p>YES &rarr; Use supervisor + agent-as-tool. Simpler.</p>
+
+<p>NO &rarr; Does the sub-agent need to:</p>
+<ul>
+<li>Ask smart, domain-specific follow-ups? &rarr; <strong>HANDOFF</strong></li>
+<li>Have long (5+ turn) conversations? &rarr; <strong>HANDOFF</strong></li>
+<li>Save you cost on LLM calls? &rarr; <strong>HANDOFF</strong></li>
+</ul>
+
+<p><strong>Start simple. Add complexity only when you feel the pain.</strong></p>
+
+<hr>
+
+<p><em>The handoff pattern is just one of several multi-agent patterns. In future posts, we&rsquo;ll explore the orchestrator pattern (a supervisor that delegates sub-tasks) and the pipeline pattern (agents chained in sequence). Each has its place &mdash; but handoff is where most teams should start when their single agent outgrows its system prompt.</em></p>
+
+</body>
+</html>
